@@ -1,6 +1,7 @@
 node_modules/
 dist/
-dist-electron/
+src-tauri/target/
+src-tauri/gen/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
