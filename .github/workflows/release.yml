@@ -43,13 +43,10 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          # 生成带日期的文件名后缀（同版本多次构建可区分）
-          DATE=$(date +%Y%m%d-%H%M)
-          echo "date_suffix=-${DATE}" >> "$GITHUB_OUTPUT"
 
       # ── 5. 创建 GitHub Release 并上传安装包 ────
       - name: Create Release and upload artifacts
-        uses: softprops/action-release@v2
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ClipMate ${{ steps.version.outputs.version }}
