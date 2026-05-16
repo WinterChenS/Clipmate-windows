@@ -2,9 +2,9 @@ name: Build & Release
 
 on:
   push:
-    branches: [main]
-  # 取消注释以下内容，允许手动触发构建
-  # workflow_dispatch:
+    tags:
+      - 'v*'          # 匹配 v1.0.0、v1.2.3-beta 等格式
+  workflow_dispatch:   # 保留手动触发，方便临时构建
 
 permissions:
   contents: write
@@ -34,14 +34,19 @@ jobs:
       - name: Build renderer & Package Electron app
         run: npm run pack
 
-      # ── 4. 提取版本号 ───────────────────────────
+      # ── 4. 提取版本号（直接从 tag 读取，格式 v1.2.0）───
       - name: Extract version info
         id: version
         shell: bash
         run: |
-          VERSION=$(node -p "require('./package.json').version")
+          TAG="${{ github.ref_name }}"
+          # workflow_dispatch 时没有 tag，fallback 到 package.json
+          if [[ -z "$TAG" || "$TAG" == "refs/heads/"* ]]; then
+            TAG="v$(node -p "require('./package.json').version")"
+          fi
+          VERSION="${TAG#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       # ── 5. 创建 GitHub Release 并上传安装包 ────
       - name: Create Release and upload artifacts
