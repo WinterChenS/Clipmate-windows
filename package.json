@@ -1,6 +1,6 @@
 {
   "name": "clipmate",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "仿 macOS Paste 的 Windows 剪贴板管理器",
   "main": "src/main/main.js",
   "scripts": {

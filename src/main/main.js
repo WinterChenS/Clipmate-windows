@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, globalShortcut, Tray, Menu, ipcMain, nativeImage, screen, protocol } = require('electron')
+const { app, BrowserWindow, clipboard, globalShortcut, Tray, Menu, ipcMain, nativeImage, screen, protocol, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -652,6 +652,21 @@ function createWindow() {
         : mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'))
       p.catch(_ => {})
     }, 1000)
+  })
+
+  // 所有外部链接用系统默认浏览器打开，而非 Electron 窗口
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const isLocal = url.startsWith('file://') || url.startsWith('http://localhost')
+    if (!isLocal) {
+      event.preventDefault()
+      shell.openExternal(url)
+    }
   })
 
   // blur 防抖 + 光标检查
