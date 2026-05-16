@@ -1,0 +1,89 @@
+{
+  "name": "clipmate",
+  "version": "1.0.0",
+  "description": "仿 macOS Paste 的 Windows 剪贴板管理器",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently \"npm run dev:renderer\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev:renderer": "vite",
+    "build": "vite build",
+    "pack": "npm run build && electron-builder --win",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "clipboard",
+    "manager",
+    "electron"
+  ],
+  "author": "ClipMate",
+  "license": "MIT",
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.18",
+    "concurrently": "^8.2.2",
+    "electron": "^29.1.4",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.38",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.1.6",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.clipmate.app",
+    "productName": "ClipMate",
+    "copyright": "Copyright © 2026 ClipMate",
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ClipMate",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "license": "LICENSE.txt",
+      "language": "2052",
+      "runAfterFinish": true,
+      "perMachine": false
+    },
+    "files": [
+      "dist/**/*",
+      "src/main/**/*",
+      "assets/**/*",
+      "!gen_icon.py",
+      "!start-*.bat"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/",
+        "to": "assets/",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "assets"
+    },
+    "publish": null
+  }
+}
