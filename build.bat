@@ -72,6 +72,17 @@ echo.
 echo [4/4] Building frontend and packaging Electron app...
 echo        (First time may take a while to download Electron binary)
 echo.
+
+:: Sync version from git tag to package.json
+for /f "delims=" %%v in ('git describe --tags --abbrev=0 2^>nul') do set GIT_TAG=%%v
+if defined GIT_TAG (
+    set GIT_VERSION=!GIT_TAG:v=!
+    echo        Version from git tag: !GIT_TAG! -^> !GIT_VERSION!
+    node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='!GIT_VERSION!';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+) else (
+    echo        No git tag found, using version from package.json
+)
+
 call npm run pack 2>nul
 
 :: Check result by file existence instead of errorlevel

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 // ─── 工具函数 ─────────────────────────────────────────────
 
@@ -341,7 +341,7 @@ function KeyRecorder({ value, onChange, label, description }) {
   )
 }
 
-function SettingsPanel({ settings, onSave, onClose }) {
+function SettingsPanel({ settings, version, onCheckUpdate, checkingUpdate, updateInfo, onSave, onClose }) {
   const [local, setLocal] = useState(settings)
 
   const handleSave = () => {
@@ -467,9 +467,40 @@ function SettingsPanel({ settings, onSave, onClose }) {
               />
             </div>
           </div>
+
+          {/* 关于 & 版本更新 */}
+          <div className="setting-group">
+            <label className="setting-label">关于</label>
+            <div className="about-section">
+              <div className="about-info">
+                <span className="about-name">ClipMate</span>
+                {version && <span className="about-version">v{version}</span>}
+              </div>
+              <button
+                className={`btn-check-update ${checkingUpdate ? 'checking' : ''}`}
+                onClick={onCheckUpdate}
+                disabled={checkingUpdate}
+              >
+                {checkingUpdate ? '检查中...' : '检查更新'}
+              </button>
+              {updateInfo && !updateInfo.available && !updateInfo.error && (
+                <span className="update-result-text">已是最新版本 ✅</span>
+              )}
+              {updateInfo?.error && (
+                <span className="update-result-text error">{updateInfo.message || '检查失败，请稍后再试'}</span>
+              )}
+              {updateInfo?.available && (
+                <div className="update-available-inline">
+                  <span>发现新版本 v{updateInfo.latestVersion}</span>
+                  <a href={updateInfo.downloadUrl} target="_blank" rel="noreferrer">前往下载</a>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="settings-footer">
+          {version && <span className="settings-version">v{version}</span>}
           <button className="btn-cancel" onClick={onClose}>取消</button>
           <button className="btn-save" onClick={handleSave}>保存并应用</button>
         </div>
@@ -501,6 +532,11 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null)
   const [toast, setToast] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
+  // 版本号：优先用主进程传来的，fallback 用 Vite 构建时注入的
+  const [appVersion, setAppVersion] = useState(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '')
+  // 版本更新状态
+  const [updateInfo, setUpdateInfo] = useState(null)  // { available, currentVersion, latestVersion, downloadUrl, message }
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
   const searchRef = useRef(null)
   const scrollRef = useRef(null)
 
@@ -523,6 +559,7 @@ export default function App() {
         setHistory(data.history || [])
         setPinned(data.pinned || [])
         if (data.settings) setSettings(data.settings)
+        if (data.version) setAppVersion(data.version)
         setSearchText('')
         setSelectedId(null)
         setTimeout(() => searchRef.current?.focus(), 50)
@@ -555,7 +592,23 @@ export default function App() {
       })
 
       window.clipboardAPI.getSettings().then((s) => {
-        if (s) setSettings(s)
+        if (s) {
+          const { version, skipUpdateVersion, ...rest } = s
+          setSettings({ ...rest, skipUpdateVersion })
+          if (version) setAppVersion(version)
+        }
+      })
+
+      // 监听版本检查结果
+      window.clipboardAPI.onUpdateCheckResult((result) => {
+        setCheckingUpdate(false)
+        if (result.available) {
+          setUpdateInfo(result)
+        } else if (result.error) {
+          setUpdateInfo({ available: false, error: true, message: result.message || '检查失败' })
+        } else {
+          setUpdateInfo({ available: false, currentVersion: result.currentVersion, latestVersion: result.latestVersion })
+        }
       })
     } else {
       setHistory(MOCK_DATA)
@@ -617,21 +670,7 @@ export default function App() {
     }
   }, [settings.theme])
 
-  // 过滤 + 搜索
-  function getDisplayItems() {
-    let items = activeTab === 'pinned' ? [...pinned] : [...history]
-    if (activeTab === 'text') items = items.filter(i => i.type === 'text' && !isUrl(i.content))
-    if (activeTab === 'image') items = items.filter(i => i.type === 'image')
-    if (activeTab === 'link') items = items.filter(i => i.type === 'text' && isUrl(i.content))
-
-    if (searchText.trim()) {
-      const q = searchText.toLowerCase()
-      items = items.filter(i => i.type === 'text' && i.content.toLowerCase().includes(q))
-    }
-    return items
-  }
-
-  // ★ 供键盘事件处理器使用（从 ref 读取值，避免依赖 state）
+  // 过滤 + 搜索（统一逻辑，供 useMemo 和键盘事件共用）
   function getDisplayItemsFrom(hist, pin) {
     let items = activeTab === 'pinned' ? [...pin] : [...hist]
     if (activeTab === 'text') items = items.filter(i => i.type === 'text' && !isUrl(i.content))
@@ -640,10 +679,15 @@ export default function App() {
 
     if (searchText.trim()) {
       const q = searchText.toLowerCase()
-      items = items.filter(i => i.type === 'text' && i.content.toLowerCase().includes(q))
+      items = items.filter(i =>
+        (i.type === 'text' && i.content.toLowerCase().includes(q)) ||
+        (i.type === 'image' && i.preview && i.preview.toLowerCase().includes(q))
+      )
     }
     return items
   }
+
+  const displayItems = useMemo(() => getDisplayItemsFrom(history, pinned), [activeTab, searchText, history, pinned])
 
   async function handlePaste(item) {
     if (window.clipboardAPI) {
@@ -673,6 +717,7 @@ export default function App() {
   }
 
   async function handleClear() {
+    if (!window.confirm('确定要清空所有剪贴板历史吗？此操作不可撤销。')) return
     if (window.clipboardAPI) {
       const result = await window.clipboardAPI.clearHistory()
       setHistory([]); setPinned([])
@@ -690,12 +735,32 @@ export default function App() {
     showToast('设置已保存')
   }
 
-  const displayItems = getDisplayItems()
+  async function handleCheckUpdate() {
+    if (!window.clipboardAPI || checkingUpdate) return
+    setCheckingUpdate(true)
+    setUpdateInfo(null)
+    try {
+      await window.clipboardAPI.checkForUpdate()
+    } catch (_) {
+      setCheckingUpdate(false)
+      setUpdateInfo({ available: false, error: true, message: '检查失败' })
+    }
+  }
+
+  async function handleSkipUpdate(version) {
+    if (window.clipboardAPI) {
+      await window.clipboardAPI.skipUpdateVersion(version)
+    }
+    setUpdateInfo(null)
+    setSettings(s => ({ ...s, skipUpdateVersion: version }))
+    showToast('已跳过此版本')
+  }
+
   const tabs = [
     { id: 'all', label: '全部', count: history.length },
     { id: 'pinned', label: '固定', count: pinned.length },
     { id: 'text', label: '文字', count: history.filter(h => h.type === 'text' && !isUrl(h.content)).length },
-    { id: 'link', label: '链接', count: history.filter(h => i => h.type === 'text' && isUrl(h.content)).length },
+    { id: 'link', label: '链接', count: history.filter(h => h.type === 'text' && isUrl(h.content)).length },
     { id: 'image', label: '图片', count: history.filter(h => h.type === 'image').length },
   ]
 
@@ -703,7 +768,22 @@ export default function App() {
   return (
     <div className={`app-container ${layout}-layout animate-slide-up`}>
       {toast && <Toast message={toast} onHide={() => setToast(null)} />}
-      {showSettings && <SettingsPanel settings={settings} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsPanel settings={settings} version={appVersion} onCheckUpdate={handleCheckUpdate} checkingUpdate={checkingUpdate} updateInfo={updateInfo} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
+
+      {/* 版本更新横幅 */}
+      {updateInfo?.available && (
+        <div className="update-banner">
+          <div className="update-banner-info">
+            <span className="update-banner-icon">🎉</span>
+            <span>发现新版本 <strong>v{updateInfo.latestVersion}</strong></span>
+          </div>
+          <div className="update-banner-actions">
+            <a className="update-btn-download" href={updateInfo.downloadUrl} target="_blank" rel="noreferrer">下载</a>
+            <button className="update-btn-skip" onClick={() => handleSkipUpdate(updateInfo.latestVersion)}>不再提示</button>
+            <button className="update-btn-dismiss" onClick={() => setUpdateInfo(null)}>✕</button>
+          </div>
+        </div>
+      )}
 
       {/* 搜索栏 */}
       <div className="search-bar">
@@ -766,6 +846,7 @@ export default function App() {
           <span className="status-text">
             {displayItems.length} 条记录{selectedId && ' · 已选中 1 条'}
             <span className="layout-indicator">{layout === 'bottom' ? '◧ 底部' : '▤ 右侧'}</span>
+            {appVersion && <span className="version-indicator">v{appVersion}</span>}
           </span>
           <div className="shortcut-hint">
             {layout === 'bottom' ? (

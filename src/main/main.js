@@ -8,6 +8,15 @@ if (require('electron-squirrel-startup')) app.quit()
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
 
+// 版本号：打包后从 package.json 读取，开发模式尝试 git describe
+const appVersion = (() => {
+  try {
+    return require('../../package.json').version
+  } catch (_) {
+    return '0.0.0-dev'
+  }
+})()
+
 let mainWindow = null
 let tray = null
 let isVisible = false
@@ -225,6 +234,7 @@ const DEFAULT_SETTINGS = {
   startWithSystem: false,
   showStatusBar: true,
   theme: 'dark',
+  skipUpdateVersion: null,
   shortcuts: {
     toggleWindow: 'Ctrl+Shift+V',
     openSettings: 'Ctrl+Comma'
@@ -273,7 +283,7 @@ function saveHistory() {
       pinned: true,
       imagePath: item.imagePath || null
     }))
-    fs.writeFileSync(DB_PATH, JSON.stringify({ history: serializableHistory, pinned: serializablePinned }, 'utf-8'))
+    fs.writeFileSync(DB_PATH, JSON.stringify({ history: serializableHistory, pinned: serializablePinned }, null, 2))
   } catch (_) {}
 }
 
@@ -372,8 +382,9 @@ function startClipboardPolling() {
         return  // 文字分支结束，不再检查图片
       }
 
-      // ★ 优化2：没有文字变化时，才考虑图片（减少 ~50% 的 readImage 调用）
-      if (!currentText) {
+      // ★ 优化2：文字没变化时，才考虑图片（减少 ~50% 的 readImage 调用）
+      // 注意：不要求 !currentText，因为截图工具可能同时写入文字和图片
+      if (currentText === lastClipboardText) {
         const currentImage = clipboard.readImage()
         if (!currentImage.isEmpty()) {
           const imgSize = currentImage.getSize()
@@ -412,13 +423,187 @@ function startClipboardPolling() {
 function getIconPath() { return isDev ? path.join(__dirname, '../../assets/icon.ico') : path.join(process.resourcesPath, 'assets', 'icon.ico') }
 function getTrayIconPath() { return isDev ? path.join(__dirname, '../../assets/tray-icon.png') : path.join(process.resourcesPath, 'assets', 'tray-icon.png') }
 
-function createWindow() {
+/**
+ * 根据当前布局设置计算窗口位置和尺寸
+ * @param {object} [settings] - 设置对象，默认使用 appSettings
+ * @returns {{ x: number, y: number, width: number, height: number }}
+ */
+function getWindowBounds(settings) {
+  const s = settings || appSettings
   const sw = screen.getPrimaryDisplay().workAreaSize
-  const isRight = appSettings.layout === 'right'
-  const w = isRight ? 360 : Math.min(sw.width - 40, 1400)
-  const h = isRight ? Math.min(sw.height - 80, 900) : 380
-  const x = isRight ? sw.width - w - 8 : Math.round((sw.width - w) / 2)
-  const y = isRight ? Math.round((sw.height - h) / 2) : Math.round(sw.height - h - 10)
+  const isR = s.layout === 'right'
+  const w = isR ? 360 : Math.min(sw.width - 40, 1400)
+  const h = isR ? Math.min(sw.height - 80, 900) : 380
+  const x = isR ? sw.width - w - 8 : Math.round((sw.width - w) / 2)
+  const y = isR ? Math.round((sw.height - h) / 2) : Math.round(sw.height - h - 10)
+  return { x, y, width: w, height: h }
+}
+
+// ─── 版本检查 ──────────────────────────────────────────────────
+
+const https = require('https')
+const GITHUB_REPO = 'WinterChenS/Clipmate-windows'  // GitHub 仓库（用于 API 查询 tag）
+const CHECK_TIMEOUT_MS = 8000                    // 网络请求超时 8 秒
+const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000   // 自动检查间隔 24 小时
+
+/**
+ * 比较两个 semver 版本号：a > b 返回 1，a < b 返回 -1，相等返回 0
+ */
+function compareSemver(a, b) {
+  const pa = a.replace(/^v/, '').split('.').map(Number)
+  const pb = b.replace(/^v/, '').split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1
+  }
+  return 0
+}
+
+/**
+ * 从 GitHub API 获取最新 tag，返回最新版本号
+ * 支持 301/302 重定向跟随，网络异常/超时/解析失败均静默返回 null
+ */
+function fetchLatestVersion(redirectCount = 0) {
+  return new Promise((resolve) => {
+    const url = `https://api.github.com/repos/${GITHUB_REPO}/tags?per_page=10`
+    const req = https.get(url, {
+      headers: { 'User-Agent': 'ClipMate-UpdateCheck' },
+      timeout: CHECK_TIMEOUT_MS
+    }, (res) => {
+      // 跟随 301/302 重定向（仓库改名时 GitHub API 会返回 301）
+      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location && redirectCount < 3) {
+        log(`版本检查: 跟随重定向 → ${res.headers.location}`)
+        fetchLatestVersionFromUrl(res.headers.location, redirectCount + 1).then(resolve)
+        return
+      }
+      let body = ''
+      res.on('data', (chunk) => { body += chunk })
+      res.on('end', () => {
+        try {
+          const tags = JSON.parse(body)
+          if (!Array.isArray(tags) || tags.length === 0) {
+            log(`版本检查: 无 tag 数据`)
+            resolve(null)
+            return
+          }
+          // 找到语义版本格式的最新 tag
+          const semverTags = tags
+            .map(t => t.name)
+            .filter(n => /^v?\d+\.\d+\.\d+$/.test(n))
+            .sort((a, b) => compareSemver(b, a))
+          const latest = semverTags[0]
+          if (latest) {
+            log(`版本检查: 最新 tag = ${latest}，当前 = v${appVersion}`)
+          }
+          resolve(latest || null)
+        } catch (e) {
+          log(`版本检查: 解析响应失败 - ${e.message}`)
+          resolve(null)
+        }
+      })
+    })
+    req.on('error', (e) => {
+      log(`版本检查: 网络错误 - ${e.message}`)
+      resolve(null)
+    })
+    req.on('timeout', () => {
+      log(`版本检查: 请求超时 (${CHECK_TIMEOUT_MS}ms)`)
+      req.destroy()
+      resolve(null)
+    })
+  })
+}
+
+/**
+ * 从指定 URL 获取最新 tag（用于跟随重定向）
+ */
+function fetchLatestVersionFromUrl(redirectUrl, redirectCount) {
+  return new Promise((resolve) => {
+    const req = https.get(redirectUrl, {
+      headers: { 'User-Agent': 'ClipMate-UpdateCheck' },
+      timeout: CHECK_TIMEOUT_MS
+    }, (res) => {
+      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location && redirectCount < 3) {
+        log(`版本检查: 跟随重定向 → ${res.headers.location}`)
+        fetchLatestVersionFromUrl(res.headers.location, redirectCount + 1).then(resolve)
+        return
+      }
+      let body = ''
+      res.on('data', (chunk) => { body += chunk })
+      res.on('end', () => {
+        try {
+          const tags = JSON.parse(body)
+          if (!Array.isArray(tags) || tags.length === 0) {
+            log(`版本检查: 无 tag 数据`)
+            resolve(null)
+            return
+          }
+          const semverTags = tags
+            .map(t => t.name)
+            .filter(n => /^v?\d+\.\d+\.\d+$/.test(n))
+            .sort((a, b) => compareSemver(b, a))
+          const latest = semverTags[0]
+          if (latest) {
+            log(`版本检查: 最新 tag = ${latest}，当前 = v${appVersion}`)
+          }
+          resolve(latest || null)
+        } catch (e) {
+          log(`版本检查: 解析响应失败 - ${e.message}`)
+          resolve(null)
+        }
+      })
+    })
+    req.on('error', (e) => {
+      log(`版本检查: 网络错误 - ${e.message}`)
+      resolve(null)
+    })
+    req.on('timeout', () => {
+      log(`版本检查: 请求超时 (${CHECK_TIMEOUT_MS}ms)`)
+      req.destroy()
+      resolve(null)
+    })
+  })
+}
+
+/**
+ * 执行版本检查，如果有新版本则通知渲染进程
+ * @param {boolean} isManual - 是否手动触发（手动触发时即使 skipUpdateVersion 也显示）
+ */
+async function checkForUpdate(isManual = false) {
+  log(`版本检查: ${isManual ? '手动' : '自动'}触发`)
+  const latestTag = await fetchLatestVersion()
+  if (!latestTag) {
+    if (isManual) safeSend('update-check-result', { available: false, error: true, message: '网络连接失败，请稍后再试' })
+    return
+  }
+
+  const latestVersion = latestTag.replace(/^v/, '')
+  const hasUpdate = compareSemver(latestVersion, appVersion) > 0
+
+  if (!hasUpdate) {
+    log(`版本检查: 已是最新版本 v${appVersion}`)
+    safeSend('update-check-result', { available: false, currentVersion: appVersion, latestVersion })
+    return
+  }
+
+  // 检查用户是否跳过了此版本
+  const skipVersion = appSettings.skipUpdateVersion
+  if (!isManual && skipVersion === latestVersion) {
+    log(`版本检查: 用户已跳过 v${latestVersion}，不再提示`)
+    return
+  }
+
+  log(`版本检查: 发现新版本 v${latestVersion}`)
+  safeSend('update-check-result', {
+    available: true,
+    currentVersion: appVersion,
+    latestVersion,
+    downloadUrl: `https://github.com/${GITHUB_REPO}/releases/tag/${latestTag}`
+  })
+}
+
+function createWindow() {
+  const { x, y, width: w, height: h } = getWindowBounds()
 
   log(`createWindow: ${w}x${h} at (${x},${y})`)
 
@@ -513,14 +698,9 @@ function showWindow(source = 'unknown') {
       log('show失败: 窗口不可用'); return
     }
     try {
-      const sw = screen.getPrimaryDisplay().workAreaSize
       appSettings = loadSettings()
-      const isR = appSettings.layout === 'right'
-      const w = isR ? 360 : Math.min(sw.width - 40, 1400)
-      const h = isR ? Math.min(sw.height - 80, 900) : 380
-      const x = isR ? sw.width - w - 8 : Math.round((sw.width - w) / 2)
-      const y = isR ? Math.round((sw.height - h) / 2) : Math.round(sw.height - h - 10)
-      mainWindow.setBounds({ x, y, width: w, height: h })
+      const bounds = getWindowBounds()
+      mainWindow.setBounds(bounds)
       mainWindow.show()
       mainWindow.focus()
       isVisible = true
@@ -529,7 +709,8 @@ function showWindow(source = 'unknown') {
       safeSend('window-shown', {
         history: slimData(clipboardHistory),
         pinned: slimData(pinnedItems),
-        settings: appSettings
+        settings: appSettings,
+        version: appVersion
       })
 
       log(`show完成 focused=${mainWindow.isFocused()}`)
@@ -552,7 +733,7 @@ function cancelBlur() { if (blurTimer) { clearTimeout(blurTimer); blurTimer = nu
 function createTray() {
   const tp = getTrayIconPath()
   tray = new Tray(fs.existsSync(tp) ? nativeImage.createFromPath(tp) : nativeImage.createEmpty())
-  tray.setToolTip('ClipMate - 剪贴板管理器')
+  tray.setToolTip(`ClipMate v${appVersion} - 剪贴板管理器`)
   updateTrayMenu()
   tray.on('click', () => toggleWindow('tray'))
 }
@@ -560,7 +741,7 @@ function updateTrayMenu() {
   if (!tray) return
   const ls = app.getLoginItemSettings()
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '显示/隐藏  Ctrl+Shift+V', click: () => toggleWindow('menu') },
+    { label: `显示/隐藏  ${appSettings.shortcuts?.toggleWindow || 'Ctrl+Shift+V'}`, click: () => toggleWindow('menu') },
     { type: 'separator' },
     { label: '开机自动启动', type: 'checkbox', checked: ls.openAtLogin, click: m => { app.setLoginItemSettings({ openAtLogin: m.checked }); updateTrayMenu() } },
     { type: 'separator' },
@@ -696,21 +877,32 @@ ipcMain.handle('delete-item', (event, itemId) => {
 })
 ipcMain.handle('clear-history', () => { clearAllData(); return { history: [], pinned: [] } })
 ipcMain.handle('hide-window', () => doHide('esc'))
-ipcMain.handle('get-settings', () => appSettings)
+ipcMain.handle('get-settings', () => ({ ...appSettings, version: appVersion }))
 ipcMain.handle('save-settings', (event, ns) => {
   appSettings = { ...appSettings, ...ns }; saveSettings(appSettings)
-  // ★ 快捷键变更时动态重注册全局热键
+  // ★ 快捷键变更时动态重注册全局热键 + 更新托盘菜单
   if (ns.shortcuts?.toggleWindow) {
     registerToggleShortcut(ns.shortcuts.toggleWindow)
+    updateTrayMenu()
   }
   if (ns.layout && mainWindow && !mainWindow.isDestroyed() && isVisible) {
-    const sw = screen.getPrimaryDisplay().workAreaSize; const isR = appSettings.layout === 'right'
-    const w = isR ? 360 : Math.min(sw.width - 40, 1400); const h = isR ? Math.min(sw.height - 80, 900): 380
-    try { mainWindow.setBounds({ x: isR ? sw.width - w - 8 : Math.round((sw.width - w) / 2), y: isR ? Math.round((sw.height - h) / 2) : Math.round(sw.height - h - 10), width: w, height: h }) } catch(_) {}
+    try { mainWindow.setBounds(getWindowBounds()) } catch(_) {}
   }
   return appSettings
 })
 ipcMain.handle('set-autostart', (event, e) => { app.setLoginItemSettings({ openAtLogin: e }); updateTrayMenu(); return e })
+
+// 版本检查 IPC
+ipcMain.handle('check-for-update', async () => {
+  await checkForUpdate(true)   // 手动触发
+  return true
+})
+ipcMain.handle('skip-update-version', (event, version) => {
+  appSettings.skipUpdateVersion = version
+  saveSettings(appSettings)
+  log(`用户跳过版本更新提示: v${version}`)
+  return true
+})
 
 /**
  * 清空全部数据（历史 + 固定 + 图片文件）
@@ -749,6 +941,11 @@ app.whenReady().then(() => {
   startClipboardPolling()
 
   registerToggleShortcut(appSettings.shortcuts?.toggleWindow || 'Ctrl+Shift+V')
+
+  // ★ 启动后延迟 5 秒自动检查版本更新（静默，网络异常不影响使用）
+  setTimeout(() => checkForUpdate(false), 5000)
+  // 每天再检查一次
+  setInterval(() => checkForUpdate(false), CHECK_INTERVAL_MS)
 
   // 定期清理（每 6 小时）
   setInterval(() => {

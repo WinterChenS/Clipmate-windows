@@ -12,10 +12,19 @@ contextBridge.exposeInMainWorld('clipboardAPI', {
   hideWindow: () => ipcRenderer.invoke('hide-window'),
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+  // 版本检查
+  checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
+  skipUpdateVersion: (version) => ipcRenderer.invoke('skip-update-version', version),
+  onUpdateCheckResult: (callback) => {
+    ipcRenderer.removeAllListeners('update-check-result')
+    ipcRenderer.on('update-check-result', (_, data) => callback(data))
+  },
   onHistoryUpdated: (callback) => {
+    ipcRenderer.removeAllListeners('history-updated')
     ipcRenderer.on('history-updated', (_, data) => callback(data))
   },
   onWindowShown: (callback) => {
+    ipcRenderer.removeAllListeners('window-shown')
     ipcRenderer.on('window-shown', (_, data) => callback(data))
   }
 })
