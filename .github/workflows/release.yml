@@ -19,7 +19,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # 获取完整历史，用于提取版本信息
+          fetch-depth: 0
 
       # ── 2. 安装 Node.js ──────────────────────────
       - name: Setup Node.js
@@ -27,20 +27,22 @@ jobs:
         with:
           node-version: '20'
 
-      # ── 3. 安装依赖 + 编译打包 ───────────────────
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
+      # ── 3. 安装 Rust ─────────────────────────────
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build renderer & Package Electron app
-        run: npm run pack
+      # ── 4. 缓存 Rust 编译产物 ────────────────────
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
-      # ── 4. 提取版本号（直接从 tag 读取，格式 v1.2.0）───
-      - name: Extract version info
+      # ── 5. 从 Tag 提取版本号并更新配置文件 ──────────
+      - name: Update version from tag
         id: version
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
-          # workflow_dispatch 时没有 tag，fallback 到 package.json
           if [[ -z "$TAG" || "$TAG" == "refs/heads/"* ]]; then
             TAG="v$(node -p "require('./package.json').version")"
           fi
@@ -48,7 +50,28 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      # ── 5. 创建 GitHub Release 并上传安装包 ────
+          # 更新 package.json
+          node -e "const p=require('./package.json'); p.version='$VERSION'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n')"
+
+          # 更新 Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+
+          # 更新 tauri.conf.json
+          node -e "const c=require('./src-tauri/tauri.conf.json'); c.version='$VERSION'; c.app.trayIcon.tooltip='ClipMate v$VERSION'; require('fs').writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(c, null, 2)+'\n')"
+
+          echo "✅ 版本号已更新为: $VERSION"
+
+      # ── 6. 安装前端依赖 ──────────────────────────
+      - name: Install frontend dependencies
+        run: npm install
+
+      # ── 7. 编译 Tauri 应用 ───────────────────────
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 8. 创建 GitHub Release 并上传安装包 ────
       - name: Create Release and upload artifacts
         uses: softprops/action-gh-release@v1
         with:
@@ -57,10 +80,10 @@ jobs:
           body: |
             ## ClipMate ${{ steps.version.outputs.version }}
 
-            **Windows 安装包** (NSIS)
+            **Windows 安装包** (Tauri + Rust)
 
             ### 安装方式
-            1. 下载下方 `ClipMate-Setup-.exe`
+            1. 下载下方安装包
             2. 双击运行安装向导
             3. 默认快捷键 `Ctrl+Shift+V` 唤起面板
 
@@ -70,7 +93,8 @@ jobs:
             ---
             *由 GitHub Actions 自动构建发布*
           files: |
-            dist-electron/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
           draft: false
           prerelease: false
         env:

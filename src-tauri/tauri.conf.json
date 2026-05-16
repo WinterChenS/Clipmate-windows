@@ -29,6 +29,12 @@
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,
       "tooltip": "ClipMate v1.2.2"
+    },
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/clipmate/images/**"]
+      }
     }
   },
   "bundle": {
@@ -47,8 +53,5 @@
         "displayLanguageSelector": false
       }
     }
-  },
-  "plugins": {
-    "global-shortcut": {}
   }
 }
