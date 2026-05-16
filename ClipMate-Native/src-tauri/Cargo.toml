@@ -1,0 +1,40 @@
+[package]
+name = "clipmate"
+version = "1.2.2"
+description = "A lightweight clipboard manager for Windows"
+authors = ["WinterChenS"]
+edition = "2021"
+
+[lib]
+name = "clipmate_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+arboard = "3"
+md-5 = "0.10"
+reqwest = { version = "0.12", features = ["json"] }
+regex-lite = "0.1"
+tokio = { version = "1", features = ["full"] }
+chrono = "0.4"
+log = "0.4"
+dirs = "5"
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_DataExchange",
+] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
