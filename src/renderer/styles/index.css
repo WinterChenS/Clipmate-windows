@@ -231,19 +231,19 @@ body {
   box-shadow: 0 8px 28px rgba(99,102,241,0.15);
 }
 
-/* ── 右侧模式卡片 (垂直列表) — 紧凑单行/双行 ── */
+/* ── 右侧模式卡片 (垂直列表) ── */
 .right-card {
   background: var(--card-bg);
   border: 0.5px solid var(--card-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: row;
   align-items: center;
   padding: 0;
   height: auto;
-  max-height: 72px;
-  min-height: 0;
+  min-height: 60px;
   overflow: hidden;
+  margin-bottom: 4px;
 }
 .right-card:hover {
   background: var(--card-hover);
@@ -261,18 +261,18 @@ body {
 .right-card-main {
   flex: 1;
   min-width: 0;
-  padding: 6px 10px;
+  padding: 10px 12px;
   overflow: hidden;
   display: flex;
   align-items: center;
-  min-height: 0;
+  gap: 10px;
 }
 .right-card-image {
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
   object-fit: cover;
-  border-radius: 5px;
+  border-radius: 6px;
   display: block;
 }
 .right-card-image-placeholder {
@@ -283,9 +283,9 @@ body {
   font-size: 20px;
 }
 .right-card-text {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--text-primary);
-  line-height: 1.4;
+  line-height: 1.45;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -299,7 +299,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px 4px 4px;
+  padding: 6px 10px 6px 4px;
   flex-shrink: 0;
 }
 .right-card-actions {
