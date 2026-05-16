@@ -169,6 +169,42 @@ function Toast({ message, onHide }) {
 
 // ─── 主题工具 ──────────────────────────────────────────────
 
+/** 检测键盘事件是否匹配 Electron Accelerator 格式 */
+function matchAccelerator(e, accelerator) {
+  if (!accelerator) return false
+  const parts = accelerator.split('+').map(s => s.trim().toLowerCase())
+  // 检查修饰键
+  const hasCtrl = parts.includes('ctrl') || parts.includes('commandorctrl')
+  const hasAlt = parts.includes('alt')
+  const hasShift = parts.includes('shift')
+  const hasCmd = parts.includes('commandorctrl') || (parts.includes('command') || parts.includes('meta'))
+
+  if (hasCtrl && !e.ctrlKey && !e.metaKey) return false
+  if (hasAlt && !e.altKey) return false
+  if (hasShift && !e.shiftKey) return false
+  if ((parts.includes('commandorctrl') || parts.includes('command') || parts.includes('meta')) && !e.metaKey && !e.ctrlKey) return false
+
+  // 检查主键
+  const mainKey = parts.find(p =>
+    !['ctrl', 'alt', 'shift', 'commandorctrl', 'command', 'meta'].includes(p)
+  )
+  if (!mainKey) return true  // 纯修饰键组合（如 Ctrl+Alt）
+
+  // 特殊按键映射
+  const keyMap = {
+    ',': 'comma', '.': 'period', '/': 'slash', '\\': 'backslash',
+    '`': 'backquote', '-': 'minus', '=': 'equal', '[': 'bracketleft',
+    ']': 'bracketright', ';': 'semicolon', "'": 'quote',
+    'enter': 'enter', 'tab': 'tab', ' ': 'space', 'backspace': 'backspace',
+    'delete': 'delete', 'insert': 'insert', 'home': 'home', 'end': 'end',
+    'pageup': 'pageup', 'pagedown': 'pagedown',
+    'arrowup': 'arrowup', 'arrowdown': 'arrowdown', 'arrowleft': 'arrowleft', 'arrowright': 'arrowright'
+  }
+  const normalizedKey = e.key.toLowerCase()
+  const expectedKey = keyMap[mainKey] || mainKey
+  return normalizedKey === expectedKey
+}
+
 function getSystemTheme() {
   if (typeof window !== 'undefined' && window.matchMedia) {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -185,7 +221,125 @@ function applyTheme(theme) {
   }
 }
 
-// ─── 设置面板 ────────────────────────────────────────────
+// ─── 快捷键录制器 ────────────────────────────────────────────
+
+/**
+ * 按键名称映射（显示用友好名称）
+ */
+const KEY_NAMES = {
+  Control: 'Ctrl', AltLeft: 'Alt', AltRight: 'Alt',
+  Meta: '⌘', ShiftLeft: 'Shift', ShiftRight: 'Shift',
+  ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+  Comma: ',', Period: '.', Slash: '/', Backslash: '\\',
+  Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[',
+  BracketRight: ']', Semicolon: ';', Quote: "'", Backspace: '⌫',
+  Delete: 'Del', Insert: 'Ins', Home: 'Home', End: 'End',
+  PageUp: 'PgUp', PageDown: 'PgDn', Enter: 'Enter', Tab: 'Tab',
+  Space: 'Space'
+}
+
+/** 将键盘事件转为 Electron Accelerator 格式 */
+function eventToAccelerator(e) {
+  const parts = []
+  if (e.ctrlKey || e.key === 'Control') parts.push('Ctrl')
+  if (e.altKey || e.key === 'Alt') parts.push('Alt')
+  if (e.metaKey || e.key === 'Meta') parts.push('CommandOrCtrl')
+  if (e.shiftKey || e.key === 'Shift') parts.push('Shift')
+
+  // 提取主键（排除修饰键）
+  const mainKey = ['Control', 'Alt', 'Meta', 'Shift'].includes(e.key) ? null : e.key
+  if (mainKey) {
+    // 单字符按键直接用，特殊键映射
+    if (mainKey.length === 1) parts.push(mainKey.toUpperCase())
+    else parts.push(mainKey)
+  }
+
+  return parts.join('+')
+}
+
+/** 将 Accelerator 格式转为显示字符串 */
+function acceleratorToDisplay(acc) {
+  if (!acc) return ''
+  return acc.replace(/CommandOrCtrl/g, '⌘').replace(/\+/g, ' + ')
+}
+
+function KeyRecorder({ value, onChange, label, description }) {
+  const [recording, setRecording] = useState(false)
+  const [currentKeys, setCurrentKeys] = useState('')
+  const containerRef = useRef(null)
+
+  const startRecord = () => {
+    setRecording(true)
+    setCurrentKeys('')
+  }
+
+  useEffect(() => {
+    if (!recording) return
+
+    const handleKeyDown = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+
+      // ESC 取消
+      if (e.key === 'Escape') {
+        setRecording(false); setCurrentKeys('')
+        return
+      }
+
+      // 回车/空格确认（如果已有组合）
+      const acc = eventToAccelerator(e)
+      if ((e.key === 'Enter' || e.key === ' ') && acc) {
+        onChange(acc)
+        setRecording(false); setCurrentKeys('')
+        return
+      }
+
+      // 实时显示当前按下的组合
+      setCurrentKeys(acceleratorToDisplay(acc))
+
+      // 有有效组合时自动确认（松开时确认不太可靠，这里按下就确认）
+      if (acc && !['Control', 'Alt', 'Meta', 'Shift'].includes(e.key)) {
+        onChange(acc)
+        setRecording(false); setCurrentKeys('')
+      }
+    }
+
+    // 点击外部取消录制
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setRecording(false); setCurrentKeys('')
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    document.addEventListener('mousedown', handleClickOutside, true)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+      document.removeEventListener('mousedown', handleClickOutside, true)
+    }
+  }, [recording, onChange])
+
+  const displayValue = recording ? (currentKeys || '按下快捷键...') : (acceleratorToDisplay(value) || '未设置')
+
+  return (
+    <div className="shortcut-row" ref={containerRef}>
+      <div className="shortcut-info">
+        <span className="shortcut-label">{label}</span>
+        {description && <span className="shortcut-desc">{description}</span>}
+      </div>
+      <button
+        className={`shortcut-recorder ${recording ? 'recording' : ''}`}
+        onClick={recording ? undefined : startRecord}
+        title={recording ? '按 ESC 取消' : '点击修改'}
+      >
+        {recording && <span className="recording-dot" />}
+        <span className="shortcut-display">{displayValue}</span>
+        {!recording && <span className="shortcut-edit">✎</span>}
+      </button>
+    </div>
+  )
+}
 
 function SettingsPanel({ settings, onSave, onClose }) {
   const [local, setLocal] = useState(settings)
@@ -288,6 +442,31 @@ function SettingsPanel({ settings, onSave, onClose }) {
               <div className={`toggle-knob ${local.showStatusBar !== false ? 'on' : ''}`} />
             </div>
           </div>
+
+          {/* 快捷键设置 */}
+          <div className="setting-group">
+            <label className="setting-label">快捷键</label>
+            <div className="shortcut-list">
+              <KeyRecorder
+                label="显示 / 隐藏窗口"
+                description="全局快捷键，任何地方可用"
+                value={local.shortcuts?.toggleWindow || 'Ctrl+Shift+V'}
+                onChange={(val) => setLocal(s => ({
+                  ...s,
+                  shortcuts: { ...s.shortcuts, toggleWindow: val }
+                }))}
+              />
+              <KeyRecorder
+                label="打开设置"
+                description="应用内快捷键"
+                value={local.shortcuts?.openSettings || 'Ctrl+Comma'}
+                onChange={(val) => setLocal(s => ({
+                  ...s,
+                  shortcuts: { ...s.shortcuts, openSettings: val }
+                }))}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="settings-footer">
@@ -328,8 +507,10 @@ export default function App() {
   // ★ 优化：用 ref 缓存动态值，避免键盘监听器反复重建
   const historyRef = useRef(history)
   const pinnedRef = useRef(pinned)
+  const settingsRef = useRef(settings)
   historyRef.current = history
   pinnedRef.current = pinned
+  settingsRef.current = settings
 
   const layout = settings.layout || 'bottom'
 
@@ -410,8 +591,9 @@ export default function App() {
         if (idx > 0) setSelectedId(list[idx - 1].id)
         else if (list.length > 0) setSelectedId(list[list.length - 1].id)
       }
-      // Ctrl+, 打开设置
-      if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+      // ★ 从 settings 读取自定义设置快捷键
+      const curSettings = settingsRef.current
+      if (matchAccelerator(e, curSettings.shortcuts?.openSettings || 'Ctrl+Comma')) {
         e.preventDefault()
         setShowSettings(true)
       }

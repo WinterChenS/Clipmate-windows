@@ -1,0 +1,76 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  # 取消注释以下内容，允许手动触发构建
+  # workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Windows Installer & Publish Release
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. 拉取代码 ──────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 获取完整历史，用于提取版本信息
+
+      # ── 2. 安装 Node.js ──────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # ── 3. 安装依赖 + 编译打包 ───────────────────
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer & Package Electron app
+        run: npm run pack
+
+      # ── 4. 提取版本号 ───────────────────────────
+      - name: Extract version info
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          # 生成带日期的文件名后缀（同版本多次构建可区分）
+          DATE=$(date +%Y%m%d-%H%M)
+          echo "date_suffix=-${DATE}" >> "$GITHUB_OUTPUT"
+
+      # ── 5. 创建 GitHub Release 并上传安装包 ────
+      - name: Create Release and upload artifacts
+        uses: softprops/action-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ClipMate ${{ steps.version.outputs.version }}
+          body: |
+            ## ClipMate ${{ steps.version.outputs.version }}
+
+            **Windows 安装包** (NSIS)
+
+            ### 安装方式
+            1. 下载下方 `ClipMate-Setup-.exe`
+            2. 双击运行安装向导
+            3. 默认快捷键 `Ctrl+Shift+V` 唤起面板
+
+            ### 更新日志
+            - 详细更新内容请查看 [Commits](https://github.com/${{ github.repository }}/commits/main)
+
+            ---
+            *由 GitHub Actions 自动构建发布*
+          files: |
+            dist-electron/*.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

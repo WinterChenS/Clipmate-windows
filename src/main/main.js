@@ -570,7 +570,33 @@ function updateTrayMenu() {
   ]))
 }
 
-// ═══ IPC ════════════════════════════════════════════════════════
+// ─── 全局快捷键（动态注册） ──────────────────────────────────
+
+let currentToggleAccelerator = null
+
+/**
+ * 注册/更新全局显示隐藏快捷键
+ * @param {string} accelerator - 如 'Ctrl+Shift+V'
+ */
+function registerToggleShortcut(accelerator) {
+  // 先注销旧的
+  if (currentToggleAccelerator) {
+    try { globalShortcut.unregister(currentToggleAccelerator) } catch (_) {}
+    currentToggleAccelerator = null
+  }
+  if (!accelerator || !accelerator.trim()) return
+  const ok = globalShortcut.register(accelerator, () => toggleWindow('hotkey'))
+  if (ok) {
+    currentToggleAccelerator = accelerator
+    log(`全局快捷键已注册: ${accelerator}`)
+  } else {
+    log(`全局快捷键注册失败: ${accelerator}，回退到默认`)
+    // 回退到默认值
+    if (accelerator !== 'Ctrl+Shift+V') {
+      registerToggleShortcut('Ctrl+Shift+V')
+    }
+  }
+}
 
 ipcMain.handle('get-history', () => ({ history: slimData(clipboardHistory), pinned: slimData(pinnedItems) }))
 
@@ -673,6 +699,10 @@ ipcMain.handle('hide-window', () => doHide('esc'))
 ipcMain.handle('get-settings', () => appSettings)
 ipcMain.handle('save-settings', (event, ns) => {
   appSettings = { ...appSettings, ...ns }; saveSettings(appSettings)
+  // ★ 快捷键变更时动态重注册全局热键
+  if (ns.shortcuts?.toggleWindow) {
+    registerToggleShortcut(ns.shortcuts.toggleWindow)
+  }
   if (ns.layout && mainWindow && !mainWindow.isDestroyed() && isVisible) {
     const sw = screen.getPrimaryDisplay().workAreaSize; const isR = appSettings.layout === 'right'
     const w = isR ? 360 : Math.min(sw.width - 40, 1400); const h = isR ? Math.min(sw.height - 80, 900): 380
@@ -718,7 +748,7 @@ app.whenReady().then(() => {
   createTray()
   startClipboardPolling()
 
-  globalShortcut.register('Ctrl+Shift+V', () => toggleWindow('hotkey'))
+  registerToggleShortcut(appSettings.shortcuts?.toggleWindow || 'Ctrl+Shift+V')
 
   // 定期清理（每 6 小时）
   setInterval(() => {
