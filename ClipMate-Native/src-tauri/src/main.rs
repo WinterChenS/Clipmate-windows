@@ -1,9 +1,13 @@
-use std::sync::mpsc;
+use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, RunEvent,
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::TrayIconBuilder,
+    WindowEvent,
+};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
-use tauri_plugin_opener::OpenerExt;
 
 mod models;
 mod commands;
@@ -11,7 +15,7 @@ mod commands;
 use models::*;
 
 fn main() {
-    log_msg("=== ClipMate Native (Rust/Tauri) 启动 ===");
+    log_msg("=== ClipMate Native (Rust/Tauri 2.0) 启动 ===");
 
     // 加载数据
     let history = load_history();
@@ -20,35 +24,42 @@ fn main() {
 
     log_msg(&format!("加载历史: {} 条, 布局: {}", history.len(), settings.layout));
 
+    let auto_start_label = if settings.auto_start { "✓ 开机启动" } else { "开机启动" };
+    let settings_clone = settings.clone();
+
     let state = AppState {
         history: Mutex::new(history),
-        settings: Mutex::new(settings.clone()),
+        settings: Mutex::new(settings),
         last_clipboard_text: Mutex::new(String::new()),
         last_clipboard_image_hash: Mutex::new(String::new()),
         visible: Mutex::new(false),
         next_id: Mutex::new(next_id),
     };
 
-    // 托盘菜单
-    let tray = SystemTray::new()
-        .with_menu(
-            SystemTrayMenu::new()
-                .add_item(tauri::CustomMenuItem::new("show", "显示 ClipMate"))
-                .add_native_item(SystemTrayMenuItem::Separator)
-                .add_item(tauri::CustomMenuItem::new("autostart", if settings.auto_start { "✓ 开机启动" } else { "开机启动" }))
-                .add_native_item(SystemTrayMenuItem::Separator)
-                .add_item(tauri::CustomMenuItem::new("quit", "退出")),
-        );
-
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .manage(state)
-        .system_tray(tray)
-        .on_system_tray_event(|app, event| {
-            match event {
-                tauri::SystemTrayEvent::MenuItemClick { id, .. } => {
-                    match id.as_str() {
+        .setup(move |app| {
+            // 托盘菜单
+            let show_item = MenuItemBuilder::with_id("show", "显示 ClipMate").build(app)?;
+            let autostart_item = MenuItemBuilder::with_id("autostart", auto_start_label).build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+
+            let menu = MenuBuilder::new(app)
+                .item(&show_item)
+                .separator()
+                .item(&autostart_item)
+                .separator()
+                .item(&quit_item)
+                .build()?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().cloned().unwrap())
+                .menu(&menu)
+                .tooltip("ClipMate v1.2.2")
+                .on_menu_event(move |app, event| {
+                    match event.id.as_ref() {
                         "show" => {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
@@ -60,24 +71,15 @@ fn main() {
                             let mut settings = state.settings.lock().unwrap();
                             settings.auto_start = !settings.auto_start;
                             save_settings(&settings);
-                            // TODO: 实际注册/取消开机启动
                         }
                         "quit" => {
                             app.exit(0);
                         }
                         _ => {}
                     }
-                }
-                tauri::SystemTrayEvent::DoubleClick { .. } => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
-                _ => {}
-            }
-        })
-        .setup(|app| {
+                })
+                .build(app)?;
+
             let app_handle = app.handle().clone();
 
             // 设置窗口位置
@@ -89,7 +91,6 @@ fn main() {
                 window.on_window_event(move |event| {
                     match event {
                         WindowEvent::Focused(false) => {
-                            // 延迟 200ms 检查，避免点击内部元素时误触
                             let app_h = app_h.clone();
                             std::thread::spawn(move || {
                                 std::thread::sleep(Duration::from_millis(200));
@@ -109,7 +110,7 @@ fn main() {
             }
 
             // 注册全局快捷键
-            let shortcut = settings.toggle_shortcut.clone();
+            let shortcut = settings_clone.toggle_shortcut.clone();
             register_global_shortcut(&app_handle, &shortcut);
 
             // 启动剪贴板监听线程
@@ -146,6 +147,8 @@ fn main() {
             commands::check_for_update,
             commands::skip_update_version,
         ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
         .run(|_app_handle, event| {
             if let RunEvent::Exit = event {
                 log_msg("ClipMate 退出");
@@ -187,24 +190,26 @@ fn position_window(window: &tauri::WebviewWindow, app: &AppHandle) {
 // ─── 全局快捷键 ────────────────────────────────────────────────
 
 fn register_global_shortcut(app: &AppHandle, shortcut: &str) {
-    if let Ok(gs) = app.global_shortcut() {
-        let shortcut_str = shortcut.to_string();
-        let _ = gs.register(shortcut, move |app, _shortcut, event| {
-            // 只在按下时触发，松开忽略
-            if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                return;
+    let gs = app.global_shortcut();
+    if let Err(e) = gs.on_shortcut(shortcut, move |app, _shortcut, event| {
+        use tauri_plugin_global_shortcut::ShortcutState;
+        if event.state != ShortcutState::Pressed {
+            return;
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            if window.is_visible().unwrap_or(false) {
+                let _ = window.hide();
+            } else {
+                let _ = window.show();
+                let _ = window.set_focus();
             }
-            if let Some(window) = app.get_webview_window("main") {
-                if window.is_visible().unwrap_or(false) {
-                    let _ = window.hide();
-                } else {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
-        });
-        log_msg(&format!("全局快捷键已注册: {}", shortcut));
+        }
+    }) {
+        log_msg(&format!("快捷键注册失败: {}", e));
+        return;
     }
+
+    log_msg(&format!("全局快捷键已注册: {}", shortcut));
 }
 
 // ─── 剪贴板监听 ────────────────────────────────────────────────
@@ -223,7 +228,7 @@ fn start_clipboard_watcher(app: AppHandle) {
                     Ok(text) if !text.is_empty() && text != last_text => {
                         log_msg(&format!("剪贴板文字: {}...", &text[..text.len().min(50)]));
                         last_text = text.clone();
-                        last_image_hash.clear(); // 文字和图片互斥
+                        last_image_hash.clear();
 
                         let state = app.state::<AppState>();
                         let mut history = state.history.lock().unwrap();
@@ -246,7 +251,6 @@ fn start_clipboard_watcher(app: AppHandle) {
 
                         history.insert(0, item.clone());
 
-                        // 超过最大条数时移除（保留 pinned）
                         let max = state.settings.lock().unwrap().max_items;
                         while history.len() > max {
                             if let Some(pos) = history.iter().rposition(|i| !i.pinned) {
@@ -257,12 +261,11 @@ fn start_clipboard_watcher(app: AppHandle) {
                         }
 
                         save_history(&history);
-                        let keep_ids: Vec<i64> = history.iter().map(|i| i.id).collect();
+                        let _keep_ids: Vec<i64> = history.iter().map(|i| i.id).collect();
                         drop(history);
 
-                        // 通知前端
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.emit("history-updated", &());
+                            let _ = window.emit("history-updated", ());
                         }
                     }
                     _ => {}
@@ -281,7 +284,6 @@ fn start_clipboard_watcher(app: AppHandle) {
                             let mut history = state.history.lock().unwrap();
                             let mut next_id = state.next_id.lock().unwrap();
 
-                            // 保存图片文件
                             let id = *next_id;
                             let img_data: Vec<u8> = img.bytes.to_vec();
                             let preview = format!("图片 ({}x{})", img.width, img.height);
@@ -315,7 +317,7 @@ fn start_clipboard_watcher(app: AppHandle) {
                                 drop(history);
 
                                 if let Some(window) = app.get_webview_window("main") {
-                                    let _ = window.emit("history-updated", &());
+                                    let _ = window.emit("history-updated", ());
                                 }
                             }
                         }

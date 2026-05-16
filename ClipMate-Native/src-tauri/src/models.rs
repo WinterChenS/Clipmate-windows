@@ -1,13 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Manager, RunEvent, SystemTray, SystemTrayEvent, SystemTrayMenu,
-    SystemTrayMenuItem, WindowEvent,
-};
 
 // ─── 数据模型 ──────────────────────────────────────────────────
 
@@ -55,6 +50,7 @@ impl Default for AppSettings {
     }
 }
 
+#[allow(dead_code)]
 pub struct AppState {
     pub history: Mutex<Vec<ClipItem>>,
     pub settings: Mutex<AppSettings>,

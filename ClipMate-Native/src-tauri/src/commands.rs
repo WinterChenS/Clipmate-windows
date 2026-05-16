@@ -1,6 +1,7 @@
-use std::sync::Mutex;
+use std::fs;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use crate::models::*;
@@ -203,7 +204,7 @@ pub async fn check_for_update() -> UpdateCheckResult {
                     match latest_tag {
                         Some(tag) => {
                             let latest_version = tag.trim_start_matches('v').to_string();
-                            let has_update = compare_semver(&format!("v{}", current), tag) > 0;
+                            let has_update = compare_semver(&format!("v{}", current), tag) == std::cmp::Ordering::Less;
                             UpdateCheckResult {
                                 available: has_update,
                                 current_version: current,
@@ -285,15 +286,67 @@ fn simulate_paste() {
     // 使用 Windows API 模拟 Ctrl+V
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            keybd_event, KEYBD_EVENT_FLAGS, VK_CONTROL, VK_V,
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_TYPE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+            KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_V,
         };
-        const KEYEVENTF_KEYUP: KEYBD_EVENT_FLAGS = KEYBD_EVENT_FLAGS(2);
+
+        let key_down_flags = KEYBD_EVENT_FLAGS(0);
+        let key_up_flags = KEYEVENTF_KEYUP;
+
+        let inputs: [INPUT; 4] = [
+            INPUT {
+                r#type: INPUT_TYPE(1), // INPUT_KEYBOARD
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VIRTUAL_KEY(VK_CONTROL.0 as u16),
+                        wScan: 0,
+                        dwFlags: key_down_flags,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_TYPE(1),
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VIRTUAL_KEY(VK_V.0 as u16),
+                        wScan: 0,
+                        dwFlags: key_down_flags,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_TYPE(1),
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VIRTUAL_KEY(VK_V.0 as u16),
+                        wScan: 0,
+                        dwFlags: key_up_flags,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_TYPE(1),
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VIRTUAL_KEY(VK_CONTROL.0 as u16),
+                        wScan: 0,
+                        dwFlags: key_up_flags,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+
         unsafe {
-            keybd_event(VK_CONTROL.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
-            keybd_event(VK_V.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
-            keybd_event(VK_V.0 as u8, 0, KEYEVENTF_KEYUP, 0);
-            keybd_event(VK_CONTROL.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+            SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
         }
     }
 }
