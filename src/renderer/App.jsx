@@ -778,7 +778,7 @@ export default function App() {
             <span>发现新版本 <strong>v{updateInfo.latestVersion}</strong></span>
           </div>
           <div className="update-banner-actions">
-            <a className="update-btn-download" href={updateInfo.downloadUrl} target="_blank" rel="noreferrer">下载</a>
+            <a className="update-btn-download" href={updateInfo.downloadUrl} target="_blank" rel="noreferrer" onClick={() => setUpdateInfo(null)}>下载</a>
             <button className="update-btn-skip" onClick={() => handleSkipUpdate(updateInfo.latestVersion)}>不再提示</button>
             <button className="update-btn-dismiss" onClick={() => setUpdateInfo(null)}>✕</button>
           </div>
