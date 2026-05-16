@@ -432,10 +432,12 @@ function getWindowBounds(settings) {
   const s = settings || appSettings
   const sw = screen.getPrimaryDisplay().workAreaSize
   const isR = s.layout === 'right'
-  const w = isR ? 360 : Math.min(sw.width - 40, 1400)
-  const h = isR ? Math.min(sw.height - 80, 900) : 380
-  const x = isR ? sw.width - w - 8 : Math.round((sw.width - w) / 2)
-  const y = isR ? Math.round((sw.height - h) / 2) : Math.round(sw.height - h - 10)
+  // 底部模式：宽=屏幕宽度，高=300，贴底贴左右
+  // 右侧模式：宽=360，高=屏幕高度，贴右贴上下
+  const w = isR ? 360 : sw.width
+  const h = isR ? sw.height : 300
+  const x = isR ? sw.width - w : 0
+  const y = isR ? 0 : sw.height - h
   return { x, y, width: w, height: h }
 }
 
@@ -669,7 +671,7 @@ function createWindow() {
     }
   })
 
-  // blur 防抖 + 光标检查
+  // blur 防抖：失焦后延迟隐藏，避免点击内部元素时误触
   mainWindow.on('blur', () => {
     if (!isVisible) return
     log('blur')
@@ -677,17 +679,8 @@ function createWindow() {
     blurTimer = setTimeout(() => {
       if (!isVisible || !mainWindow || mainWindow.isDestroyed()) return
       if (mainWindow.isFocused()) return
-
-      // 光标在窗口内则重新聚焦
-      const cur = screen.getCursorScreenPoint()
-      const b = mainWindow.getBounds()
-      if (cur.x >= b.x && cur.x <= b.x + b.width && cur.y >= b.y && cur.y <= b.y + b.height) {
-        try { mainWindow.focus() } catch (_) {}
-        return
-      }
-
       doHide('blur-check')
-    }, 300)
+    }, 200)
   })
   mainWindow.on('focus', () => { if (blurTimer) { clearTimeout(blurTimer); blurTimer = null } })
   mainWindow.on('closed', () => { log('closed!'); isVisible = false; cancelBlur() })
