@@ -361,6 +361,16 @@ pub fn get_work_area() -> (i32, i32, i32, i32) {
     use windows::Win32::Foundation::{HWND, RECT};
 
     unsafe {
+        // 方式1：先尝试用 SPI_GETWORKAREA（最可靠）
+        {
+            use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+            let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            if SystemParametersInfoW(SPI_GETWORKAREA, 0, Some(&mut rect as *mut _ as *mut _), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0)).is_ok() {
+                return (rect.left, rect.top, rect.right, rect.bottom);
+            }
+        }
+
+        // 方式2：回退到 GetMonitorInfoW
         let hmonitor = MonitorFromWindow(HWND(std::ptr::null_mut()), MONITOR_DEFAULTTOPRIMARY);
         let mut mi = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
