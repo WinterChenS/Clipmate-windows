@@ -57,7 +57,7 @@ jobs:
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
 
           # 更新 tauri.conf.json
-          node -e "const c=require('./src-tauri/tauri.conf.json'); c.version='$VERSION'; c.app.trayIcon.tooltip='ClipMate v$VERSION'; require('fs').writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(c, null, 2)+'\n')"
+          node -e "const c=require('./src-tauri/tauri.conf.json'); c.version='$VERSION'; if(c.app.trayIcon) c.app.trayIcon.tooltip='ClipMate v$VERSION'; require('fs').writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(c, null, 2)+'\n')"
 
           echo "✅ 版本号已更新为: $VERSION"
 
