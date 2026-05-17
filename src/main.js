@@ -111,7 +111,7 @@ async function init() {
     appEl.classList.remove('animate-show');
     void appEl.offsetWidth; // force reflow
     appEl.classList.add('animate-show');
-    setTimeout(() => appEl.classList.remove('animate-show'), 300);
+    setTimeout(() => appEl.classList.remove('animate-show'), 200);
   });
 
   setupImageObserver();
