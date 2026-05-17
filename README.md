@@ -12,7 +12,11 @@
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
----
+## 效果预览
+
+<p align="center">
+  <img src="assets/preview.png" alt="ClipMate 效果预览" width="100%" />
+</p>
 
 ## 功能特性
 

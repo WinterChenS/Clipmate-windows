@@ -55,7 +55,10 @@ pub fn save_settings_cmd(new_settings: AppSettings, app: AppHandle, state: State
             if let Some(window) = app.get_webview_window("main") {
                 if window.is_visible().unwrap_or(false) { let _ = window.hide(); }
                 else {
-                    let _ = window.show(); let _ = window.set_focus();
+                    let _ = window.show();
+                    let _ = window.set_skip_taskbar(true);
+                    let _ = window.set_focus();
+                    let _ = window.emit("window-shown", ());
                     let state = app.state::<AppState>();
                     *state.last_shown.lock().unwrap() = std::time::Instant::now();
                 }
@@ -68,7 +71,10 @@ pub fn save_settings_cmd(new_settings: AppSettings, app: AppHandle, state: State
                 if let Some(window) = app.get_webview_window("main") {
                     if window.is_visible().unwrap_or(false) { let _ = window.hide(); }
                     else {
-                        let _ = window.show(); let _ = window.set_focus();
+                        let _ = window.show();
+                        let _ = window.set_skip_taskbar(true);
+                        let _ = window.set_focus();
+                        let _ = window.emit("window-shown", ());
                         let state = app.state::<AppState>();
                         *state.last_shown.lock().unwrap() = std::time::Instant::now();
                     }

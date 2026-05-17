@@ -25,11 +25,6 @@
         "visible": false
       }
     ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true,
-      "tooltip": "ClipMate v1.2.2"
-    },
     "security": {
       "assetProtocol": {
         "enable": true,
