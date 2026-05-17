@@ -457,7 +457,7 @@ fn start_clipboard_watcher(app: AppHandle) {
                 // 检查文字
                 match clipboard.get_text() {
                     Ok(text) if !text.is_empty() && text != last_text => {
-                        log_msg(&format!("剪贴板文字: {}...", &text[..text.len().min(50)]));
+                        log_msg(&format!("剪贴板文字: {}...", &text.chars().take(50).collect::<String>()));
                         last_text = text.clone();
                         last_image_hash.clear();
 
