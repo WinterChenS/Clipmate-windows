@@ -714,6 +714,15 @@ function bindMainEvents() {
     });
   });
 
+  // 底部布局：鼠标滚轮转水平滚动
+  const bottomScroll = document.querySelector('.bottom-scroll');
+  if (bottomScroll) {
+    bottomScroll.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      bottomScroll.scrollBy({ left: e.deltaY, behavior: 'auto' });
+    }, { passive: false });
+  }
+
   // 更新横幅
   const btnDownload = document.getElementById('btn-download-update');
   if (btnDownload) btnDownload.addEventListener('click', () => { updateInfo = null; });
