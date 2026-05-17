@@ -342,17 +342,84 @@ fn main() {
     }
 }
 
+// ─── 剪贴板图片编码 ────────────────────────────────────────────
+
+/// 将剪贴板 RGBA 数据编码为 PNG，健壮处理数据长度不匹配
+fn encode_clipboard_image(data: &[u8], width: usize, height: usize) -> Result<Vec<u8>, String> {
+    let expected_len = width * height * 4;
+
+    if data.len() == expected_len {
+        // 标准情况：数据长度完全匹配
+        let rgba = image::RgbaImage::from_raw(width as u32, height as u32, data.to_vec())
+            .ok_or_else(|| format!("from_raw 失败: {}x{} 需要{}字节，实际{}字节", width, height, expected_len, data.len()))?;
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        rgba.write_to(&mut cursor, image::ImageFormat::Png)
+            .map_err(|e| format!("PNG编码失败: {}", e))?;
+        Ok(buf)
+    } else if data.len() > expected_len {
+        // 数据比预期多：可能包含行对齐填充（DIB stride），尝试逐行提取
+        log_msg(&format!("图片数据超长: 期望{}字节，实际{}字节，尝试行对齐处理", expected_len, data.len()));
+
+        // 计算可能的 stride（每行字节数，向上取整到4字节）
+        let row_bytes = width * 4;
+        let stride = (row_bytes + 3) & !3; // 4字节对齐
+
+        if data.len() >= stride * height {
+            let mut clean_data = Vec::with_capacity(expected_len);
+            for y in 0..height {
+                let offset = y * stride;
+                clean_data.extend_from_slice(&data[offset..offset + row_bytes]);
+            }
+            let rgba = image::RgbaImage::from_raw(width as u32, height as u32, clean_data)
+                .ok_or_else(|| "行对齐处理后 from_raw 仍然失败".to_string())?;
+            let mut buf = Vec::new();
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            rgba.write_to(&mut cursor, image::ImageFormat::Png)
+                .map_err(|e| format!("PNG编码失败: {}", e))?;
+            Ok(buf)
+        } else {
+            // stride 不匹配，直接截断到期望长度尝试
+            log_msg(&format!("stride不匹配 (stride={}, 需要{})，截断尝试", stride, data.len() / height));
+            let truncated = &data[..expected_len.min(data.len())];
+            let mut padded = truncated.to_vec();
+            padded.resize(expected_len, 0);
+
+            let rgba = image::RgbaImage::from_raw(width as u32, height as u32, padded)
+                .ok_or_else(|| format!("截断后 from_raw 仍然失败: {}x{}", width, height))?;
+            let mut buf = Vec::new();
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            rgba.write_to(&mut cursor, image::ImageFormat::Png)
+                .map_err(|e| format!("PNG编码失败: {}", e))?;
+            Ok(buf)
+        }
+    } else {
+        // 数据比预期少：填充零
+        log_msg(&format!("图片数据不足: 期望{}字节，实际{}字节，零填充", expected_len, data.len()));
+        let mut padded = data.to_vec();
+        padded.resize(expected_len, 0);
+
+        let rgba = image::RgbaImage::from_raw(width as u32, height as u32, padded)
+            .ok_or_else(|| format!("填充后 from_raw 失败: {}x{}", width, height))?;
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        rgba.write_to(&mut cursor, image::ImageFormat::Png)
+            .map_err(|e| format!("PNG编码失败: {}", e))?;
+        Ok(buf)
+    }
+}
+
 // ─── 窗口定位 ──────────────────────────────────────────────────
 
 fn position_window(window: &tauri::WebviewWindow, app: &AppHandle) {
-    let (is_right, max_items) = if let Some(state) = app.try_state::<AppState>() {
+    let is_right = if let Some(state) = app.try_state::<AppState>() {
         if let Ok(settings) = state.settings.lock() {
-            (settings.layout == "right", settings.max_items)
+            settings.layout == "right"
         } else {
-            (false, 200)
+            false
         }
     } else {
-        (false, 200)
+        false
     };
 
     let (work_left, work_top, work_right, work_bottom) = models::get_work_area();
@@ -442,6 +509,171 @@ pub fn reregister_global_shortcut(app: &AppHandle, old_shortcut: &str, new_short
     register_global_shortcut(app, new_shortcut);
 }
 
+// ─── Win32 剪贴板图片读取回退 ──────────────────────────────────
+
+/// 当 arboard 无法读取剪贴板图片时，使用 Win32 API 直接读取
+#[cfg(target_os = "windows")]
+fn read_clipboard_image_win32() -> Option<(Vec<u8>, usize, usize)> {
+    use windows::Win32::System::DataExchange::{
+        OpenClipboard, CloseClipboard, GetClipboardData,
+        IsClipboardFormatAvailable, RegisterClipboardFormatW,
+    };
+    use windows::Win32::Foundation::{HWND, HGLOBAL};
+
+    unsafe {
+        if OpenClipboard(HWND(std::ptr::null_mut())).is_err() {
+            log_msg("Win32回退: 无法打开剪贴板");
+            return None;
+        }
+
+        let result = 'outer: {
+            // 1. 尝试 CF_PNG（最可靠，直接获取 PNG 原始字节）
+            let png_format = RegisterClipboardFormatW(windows::core::w!("PNG"));
+            if png_format != 0 {
+                if IsClipboardFormatAvailable(png_format).is_ok() {
+                    if let Ok(handle) = GetClipboardData(png_format) {
+                        if let Some(data) = read_global_memory(HGLOBAL(handle.0)) {
+                            log_msg(&format!("Win32回退: 读取到 CF_PNG ({}字节)", data.len()));
+                            if let Ok(img) = image::load_from_memory(&data) {
+                                let (w, h) = (img.width() as usize, img.height() as usize);
+                                break 'outer Some((data, w, h));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. 尝试 CF_DIB（DIB 格式 ID = 8）
+            let cf_dib: u32 = 8;
+            if IsClipboardFormatAvailable(cf_dib).is_ok() {
+                if let Ok(handle) = GetClipboardData(cf_dib) {
+                    if let Some(data) = read_global_memory(HGLOBAL(handle.0)) {
+                        log_msg(&format!("Win32回退: 读取到 CF_DIB ({}字节)", data.len()));
+                        if let Some((png_bytes, w, h)) = convert_dib_to_png(&data) {
+                            break 'outer Some((png_bytes, w, h));
+                        }
+                    }
+                }
+            }
+
+            log_msg("Win32回退: 剪贴板中无可用图片格式");
+            None
+        };
+
+        let _ = CloseClipboard();
+        result
+    }
+}
+
+/// 读取 Win32 全局内存句柄中的数据
+#[cfg(target_os = "windows")]
+unsafe fn read_global_memory(handle: windows::Win32::Foundation::HGLOBAL) -> Option<Vec<u8>> {
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock, GlobalSize};
+
+    let ptr = GlobalLock(handle);
+    if ptr.is_null() {
+        return None;
+    }
+    let size = GlobalSize(handle) as usize;
+    if size == 0 {
+        let _ = GlobalUnlock(handle);
+        return None;
+    }
+    let data = std::slice::from_raw_parts(ptr as *const u8, size).to_vec();
+    let _ = GlobalUnlock(handle);
+    Some(data)
+}
+
+/// 将 DIB（设备无关位图）数据转换为 PNG
+#[cfg(target_os = "windows")]
+fn convert_dib_to_png(dib_data: &[u8]) -> Option<(Vec<u8>, usize, usize)> {
+    if dib_data.len() < 40 {
+        log_msg(&format!("DIB数据太短: {}字节", dib_data.len()));
+        return None;
+    }
+
+    // 解析 BITMAPINFOHEADER（40字节）
+    let bi_size = u32::from_le_bytes(dib_data[0..4].try_into().ok()?) as usize;
+    let bi_width = i32::from_le_bytes(dib_data[4..8].try_into().ok()?) as usize;
+    let bi_height_raw = i32::from_le_bytes(dib_data[8..12].try_into().ok()?);
+    let bi_bit_count = u16::from_le_bytes(dib_data[14..16].try_into().ok()?) as usize;
+    let bi_compression = u32::from_le_bytes(dib_data[16..20].try_into().ok()?);
+
+    let top_down = bi_height_raw < 0;
+    let bi_height = if top_down { -bi_height_raw as usize } else { bi_height_raw as usize };
+
+    log_msg(&format!("DIB信息: {}x{}, {}bit, compression={}, top_down={}",
+        bi_width, bi_height, bi_bit_count, bi_compression, top_down));
+
+    // 支持的压缩格式：
+    //   0 = BI_RGB（无压缩）
+    //   3 = BI_BITFIELDS（32位下带颜色掩码，像素数据仍是未压缩 BGRA）
+    //   4 = BI_JPEG / 5 = BI_PNG（剪贴板中不应出现，但记录日志）
+    if bi_compression != 0 && bi_compression != 3 {
+        log_msg(&format!("DIB压缩格式不支持: compression={}（0=未压缩,3=BI_BITFIELDS）", bi_compression));
+        return None;
+    }
+    if bi_bit_count != 32 && bi_bit_count != 24 {
+        log_msg(&format!("DIB位深不支持: {}bit（仅支持24/32位）", bi_bit_count));
+        return None;
+    }
+
+    // BI_BITFIELDS (compression=3) 时，头后面紧跟3个掩码DWORD（12字节）
+    // 然后才是像素数据；BI_RGB (compression=0) 时直接从头后面开始
+    let mask_size = if bi_compression == 3 { 12usize } else { 0 };
+    let pixel_data_offset = bi_size + mask_size;
+    if pixel_data_offset >= dib_data.len() {
+        log_msg(&format!("DIB像素数据偏移超出范围: offset={}, len={}", pixel_data_offset, dib_data.len()));
+        return None;
+    }
+
+    let pixels = &dib_data[pixel_data_offset..];
+    let bytes_per_pixel = bi_bit_count / 8;
+    let row_bytes = bi_width * bytes_per_pixel;
+    let row_stride = (row_bytes + 3) & !3; // 4字节对齐
+
+    if pixels.len() < row_stride * bi_height {
+        log_msg(&format!("DIB像素数据不足: 需要{}字节，实际{}字节",
+            row_stride * bi_height, pixels.len()));
+        return None;
+    }
+
+    // 转换 BGR/BGRA → RGBA，同时处理 top-down/bottom-up
+    let mut rgba_data = Vec::with_capacity(bi_width * bi_height * 4);
+    for y in 0..bi_height {
+        let src_y = if top_down { y } else { bi_height - 1 - y };
+        let row_start = src_y * row_stride;
+        for x in 0..bi_width {
+            let pixel_start = row_start + x * bytes_per_pixel;
+            if pixel_start + bytes_per_pixel > pixels.len() { break; }
+            let b = pixels[pixel_start];
+            let g = pixels[pixel_start + 1];
+            let r = pixels[pixel_start + 2];
+            let a = if bytes_per_pixel == 4 { pixels[pixel_start + 3] } else { 255 };
+            rgba_data.extend_from_slice(&[r, g, b, a]);
+        }
+    }
+
+    // 编码为 PNG
+    match image::RgbaImage::from_raw(bi_width as u32, bi_height as u32, rgba_data) {
+        Some(img) => {
+            let mut buf = Vec::new();
+            let mut cursor = std::io::Cursor::new(&mut buf);
+            match img.write_to(&mut cursor, image::ImageFormat::Png) {
+                Ok(_) => Some((buf, bi_width, bi_height)),
+                Err(e) => {
+                    log_msg(&format!("DIB转PNG编码失败: {}", e));
+                    None
+                }
+            }
+        }
+        None => {
+            log_msg("DIB转RGBA失败: from_raw返回None");
+            None
+        }
+    }
+}
+
 // ─── 剪贴板监听 ────────────────────────────────────────────────
 
 fn start_clipboard_watcher(app: AppHandle) {
@@ -449,26 +681,47 @@ fn start_clipboard_watcher(app: AppHandle) {
         let mut last_text = String::new();
         let mut last_image_hash = String::new();
         let mut last_save = std::time::Instant::now() - Duration::from_secs(10);
+        let mut clipboard_fail_count: u32 = 0; // 连续失败计数
+        let mut last_clipboard_err_logged = false;
+        let mut img_err_count: u32 = 0; // 图片读取错误计数
 
         loop {
-            std::thread::sleep(Duration::from_millis(1200));
+            std::thread::sleep(Duration::from_millis(1000));
 
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                // 检查文字
-                match clipboard.get_text() {
-                    Ok(text) if !text.is_empty() && text != last_text => {
-                        log_msg(&format!("剪贴板文字: {}...", &text.chars().take(50).collect::<String>()));
-                        last_text = text.clone();
-                        last_image_hash.clear();
+            let mut clipboard = match arboard::Clipboard::new() {
+                Ok(cb) => {
+                    if clipboard_fail_count > 0 {
+                        log_msg(&format!("剪贴板访问恢复（之前连续失败 {} 次）", clipboard_fail_count));
+                    }
+                    clipboard_fail_count = 0;
+                    last_clipboard_err_logged = false;
+                    cb
+                }
+                Err(e) => {
+                    clipboard_fail_count += 1;
+                    if !last_clipboard_err_logged {
+                        log_msg(&format!("剪贴板访问失败（第{}次）: {}", clipboard_fail_count, e));
+                        last_clipboard_err_logged = true;
+                    }
+                    continue;
+                }
+            };
 
-                        if let Some(state) = app.try_state::<AppState>() {
-                            if let Ok(mut history) = state.history.lock() {
-                                if let Ok(mut next_id) = state.next_id.lock() {
-                                    // 去重
-                                    if history.iter().any(|i| matches!(&i.content, ClipContent::Text { content } if *content == text)) {
-                                        continue;
-                                    }
+            // 检查文字（注意：不能用 continue 跳过图片检查）
+            let mut text_processed = false;
+            match clipboard.get_text() {
+                Ok(text) if !text.is_empty() && text != last_text => {
+                    log_msg(&format!("剪贴板文字: {}...", &text.chars().take(50).collect::<String>()));
+                    last_text = text.clone();
+                    last_image_hash.clear();
 
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Ok(mut history) = state.history.lock() {
+                            if let Ok(mut next_id) = state.next_id.lock() {
+                                // 去重：仅在历史中已存在时标记，不再 continue
+                                let is_dup = history.iter().any(|i| matches!(&i.content, ClipContent::Text { content } if *content == text));
+
+                                if !is_dup {
                                     let item = ClipItem {
                                         id: *next_id,
                                         content: ClipContent::Text { content: text },
@@ -498,98 +751,103 @@ fn start_clipboard_watcher(app: AppHandle) {
                                         let _ = window.emit("history-updated", ());
                                     }
                                 }
+                                text_processed = true;
                             }
                         }
                     }
-                    _ => {}
                 }
+                _ => {}
+            }
 
-                // 检查图片
-                match clipboard.get_image() {
-                    Ok(img) => {
-                        let hash = compute_image_hash(&img.bytes);
-                        if hash != last_image_hash {
-                            log_msg("剪贴板图片变化");
-                            last_image_hash = hash;
-                            last_text.clear();
+            // 检查图片（始终执行，不再被文字处理跳过）
+            // 先尝试 arboard，失败则用 Win32 API 回退
+            let image_result: Option<(Vec<u8>, usize, usize)> = match clipboard.get_image() {
+                Ok(img) => {
+                    // arboard 成功，将 RGBA 编码为 PNG
+                    let img_data: Vec<u8> = img.bytes.to_vec();
+                    match encode_clipboard_image(&img_data, img.width, img.height) {
+                        Ok(png_data) => Some((png_data, img.width, img.height)),
+                        Err(e) => {
+                            log_msg(&format!("arboard图片编码失败: {}，尝试Win32回退", e));
+                            read_clipboard_image_win32()
+                        }
+                    }
+                }
+                Err(e) => {
+                    // arboard 失败，尝试 Win32 API 回退
+                    img_err_count += 1;
+                    if img_err_count <= 3 || img_err_count % 100 == 0 {
+                        log_msg(&format!("arboard图片读取失败（第{}次）: {}，尝试Win32回退", img_err_count, e));
+                    }
+                    read_clipboard_image_win32()
+                }
+            };
 
-                            if let Some(state) = app.try_state::<AppState>() {
-                                if let Ok(mut history) = state.history.lock() {
-                                    if let Ok(mut next_id) = state.next_id.lock() {
-                                        let id = *next_id;
-                                        let img_data: Vec<u8> = img.bytes.to_vec();
-                                        let preview = format!("图片 ({}x{})", img.width, img.height);
+            if let Some((png_data, img_w, img_h)) = image_result {
+                // 用 PNG 数据计算 hash 去重
+                let hash = compute_image_hash(&png_data);
+                if hash != last_image_hash {
+                    log_msg(&format!("剪贴板图片变化 ({}x{}, {}字节)", img_w, img_h, png_data.len()));
+                    last_image_hash = hash;
+                    if !text_processed {
+                        last_text.clear();
+                    }
 
-                                        // 将剪贴板RGBA数据编码为PNG
-                                        let png_data = match (|| -> Result<Vec<u8>, String> {
-                                            let rgba = image::RgbaImage::from_raw(
-                                                img.width as u32, img.height as u32, img_data
-                                            ).ok_or("图片数据与尺寸不匹配")?;
-                                            let mut buf = Vec::new();
-                                            let mut cursor = std::io::Cursor::new(&mut buf);
-                                            rgba.write_to(&mut cursor, image::ImageFormat::Png)
-                                                .map_err(|e| format!("PNG编码失败: {}", e))?;
-                                            Ok(buf)
-                                        })() {
-                                            Ok(data) => data,
-                                            Err(e) => {
-                                                log_msg(&format!("图片编码失败: {}", e));
-                                                continue;
-                                            }
-                                        };
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Ok(mut history) = state.history.lock() {
+                            if let Ok(mut next_id) = state.next_id.lock() {
+                                let id = *next_id;
+                                let preview = format!("图片 ({}x{})", img_w, img_h);
 
-                                        let file_path = images_dir().join(format!("{}.png", id));
-                                        let write_ok = std::fs::write(&file_path, &png_data).is_ok();
-                                        if !write_ok {
-                                            log_msg(&format!("图片文件写入失败: {:?}", file_path));
-                                            continue;
-                                        }
-                                        log_msg(&format!("图片已保存: {}.png ({}KB)", id, png_data.len() / 1024));
+                                let file_path = images_dir().join(format!("{}.png", id));
+                                let write_ok = std::fs::write(&file_path, &png_data).is_ok();
+                                if !write_ok {
+                                    log_msg(&format!("图片文件写入失败: {:?}", file_path));
+                                    continue;
+                                }
+                                log_msg(&format!("图片已保存: {}.png ({}KB)", id, png_data.len() / 1024));
 
-                                        // 生成缩略图
-                                        generate_and_save_thumbnail(&png_data, id);
+                                // 生成缩略图
+                                generate_and_save_thumbnail(&png_data, id);
 
-                                        {
-                                            let file_url = format!("file:///{}", file_path.to_string_lossy().replace('\\', "/"));
+                                {
+                                    let file_url = format!("file:///{}", file_path.to_string_lossy().replace('\\', "/"));
 
-                                            let item = ClipItem {
-                                                id,
-                                                content: ClipContent::Image {
-                                                    path: file_url,
-                                                    preview,
-                                                },
-                                                time: chrono::Local::now().to_rfc3339(),
-                                                pinned: false,
-                                            };
-                                            *next_id += 1;
-                                            history.insert(0, item);
+                                    let item = ClipItem {
+                                        id,
+                                        content: ClipContent::Image {
+                                            path: file_url,
+                                            preview,
+                                        },
+                                        time: chrono::Local::now().to_rfc3339(),
+                                        pinned: false,
+                                    };
+                                    *next_id += 1;
+                                    history.insert(0, item);
 
-                                            let max = if let Ok(settings) = state.settings.lock() {
-                                                settings.max_items
-                                            } else { 200 };
-                                            while history.len() > max {
-                                                if let Some(pos) = history.iter().rposition(|i| !i.pinned) {
-                                                    history.remove(pos);
-                                                } else { break; }
-                                            }
+                                    let max = if let Ok(settings) = state.settings.lock() {
+                                        settings.max_items
+                                    } else { 200 };
+                                    while history.len() > max {
+                                        if let Some(pos) = history.iter().rposition(|i| !i.pinned) {
+                                            history.remove(pos);
+                                        } else { break; }
+                                    }
 
-                                            let now = std::time::Instant::now();
-                                            if now.duration_since(last_save) > Duration::from_millis(800) {
-                                                save_history(&history);
-                                                last_save = now;
-                                            }
-                                            drop(history);
+                                    let now = std::time::Instant::now();
+                                    if now.duration_since(last_save) > Duration::from_millis(800) {
+                                        save_history(&history);
+                                        last_save = now;
+                                    }
+                                    drop(history);
 
-                                            if let Some(window) = app.get_webview_window("main") {
-                                                let _ = window.emit("history-updated", ());
-                                            }
-                                        }
+                                    if let Some(window) = app.get_webview_window("main") {
+                                        let _ = window.emit("history-updated", ());
                                     }
                                 }
                             }
                         }
                     }
-                    _ => {}
                 }
             }
         }

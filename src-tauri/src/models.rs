@@ -165,6 +165,7 @@ pub fn save_settings(s: &AppSettings) {
 /// 缩略图最大宽度
 const THUMB_MAX_WIDTH: u32 = 200;
 
+#[allow(dead_code)]
 pub fn save_clipboard_image(data: &[u8], item_id: i64) -> Option<String> {
     let dir = images_dir();
     let file_path = dir.join(format!("{}.png", item_id));
