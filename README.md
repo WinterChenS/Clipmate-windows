@@ -15,9 +15,8 @@
 ## 效果预览
 
 <p align="center">
-  <img src="assets/preview.png" alt="底部布局" width="100%" />
-  <br/><br/>
-  <img src="assets/preview-right.png" alt="右侧布局" width="320px" />
+  <img src="assets/preview.png" alt="底部布局" height="300" />
+  <img src="assets/preview-right.png" alt="右侧布局" height="300" />
 </p>
 
 ## 功能特性
