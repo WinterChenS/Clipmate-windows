@@ -103,10 +103,15 @@ pub fn log_msg(msg: &str) {
     // 日志轮转：超限时截断
     if let Ok(meta) = fs::metadata(&path) {
         if meta.len() > MAX_LOG_SIZE {
-            // 保留最后 256KB
+            // 保留最后 256KB，需要对齐到 UTF-8 字符边界
             if let Ok(content) = fs::read_to_string(&path) {
                 let keep = content.len().saturating_sub(256 * 1024);
-                let truncated = &content[keep..];
+                // 找到下一个有效的 UTF-8 字符边界，避免切在中文中间
+                let mut boundary = keep;
+                while boundary < content.len() && !content.is_char_boundary(boundary) {
+                    boundary += 1;
+                }
+                let truncated = &content[boundary..];
                 let _ = fs::write(&path, truncated);
             }
         }
