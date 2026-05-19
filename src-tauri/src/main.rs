@@ -46,9 +46,27 @@ fn main() {
     log_msg("=== ClipMate (Tauri 2.0) 启动 ===");
 
     // 加载数据
-    let history = load_history();
+    let mut history = load_history();
     let settings = load_settings();
     let next_id = history.iter().map(|i| i.id).max().unwrap_or(0) + 1;
+
+    // 启动时按 max_items 裁剪历史（避免已有条数超过设置上限）
+    let max = settings.max_items;
+    if history.len() > max {
+        let removed = history.len() - max;
+        // 从末尾移除非固定条目
+        let mut to_remove = removed;
+        while to_remove > 0 {
+            if let Some(pos) = history.iter().rposition(|i| !i.pinned) {
+                history.remove(pos);
+                to_remove -= 1;
+            } else {
+                break;
+            }
+        }
+        log_msg(&format!("启动裁剪: 移除 {} 条多余历史（上限 {}）", removed - to_remove, max));
+        save_history(&history);
+    }
 
     log_msg(&format!("加载历史: {} 条, 布局: {}", history.len(), settings.layout));
 

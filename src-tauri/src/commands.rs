@@ -36,11 +36,32 @@ pub fn save_settings_cmd(new_settings: AppSettings, app: AppHandle, state: State
     let shortcut_changed = old_shortcut != new_settings.toggle_shortcut;
 
     // 保存新设置
+    let max_items = new_settings.max_items;
     {
         let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
         *settings = new_settings.clone();
     }
     save_settings(&new_settings);
+
+    // max_items 变小时裁剪历史
+    {
+        let mut history = state.history.lock().map_err(|e| e.to_string())?;
+        if history.len() > max_items {
+            let mut to_remove = history.len() - max_items;
+            while to_remove > 0 {
+                if let Some(pos) = history.iter().rposition(|i| !i.pinned) {
+                    history.remove(pos);
+                    to_remove -= 1;
+                } else {
+                    break;
+                }
+            }
+            save_history(&history);
+            log_msg(&format!("设置变更裁剪: 历史裁剪到 {} 条", history.len()));
+            // 通知前端刷新
+            let _ = app.emit("history-updated", ());
+        }
+    }
 
     // 快捷键变化时重新注册
     if shortcut_changed {
