@@ -175,13 +175,22 @@ fn main() {
                                         settings.auto_start = !settings.auto_start;
                                         let enable = settings.auto_start;
                                         save_settings(&settings);
+                                        // 更新托盘菜单文字
+                                        let label = if enable { "开机启动 ✓" } else { "开机启动" };
+                                        let _ = autostart_item.set_text(label);
                                         {
                                             use tauri_plugin_autostart::ManagerExt;
                                             let manager = app.autolaunch();
                                             if enable {
-                                                let _ = manager.enable();
+                                                match manager.enable() {
+                                                    Ok(_) => log_msg("开机自启动已启用"),
+                                                    Err(e) => log_msg(&format!("开机自启动启用失败: {}", e)),
+                                                }
                                             } else {
-                                                let _ = manager.disable();
+                                                match manager.disable() {
+                                                    Ok(_) => log_msg("开机自启动已关闭"),
+                                                    Err(e) => log_msg(&format!("开机自启动关闭失败: {}", e)),
+                                                }
                                             }
                                         }
                                     }
