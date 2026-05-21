@@ -745,10 +745,27 @@ fn start_clipboard_watcher(app: AppHandle) {
                     if let Some(state) = app.try_state::<AppState>() {
                         if let Ok(mut history) = state.history.lock() {
                             if let Ok(mut next_id) = state.next_id.lock() {
-                                // 去重：仅在历史中已存在时标记，不再 continue
-                                let is_dup = history.iter().any(|i| matches!(&i.content, ClipContent::Text { content } if *content == text));
+                                // 去重：已存在则移到最前面（更新时间），不存在则新增
+                                let dup_pos = history.iter().position(|i| matches!(&i.content, ClipContent::Text { content } if *content == text));
 
-                                if !is_dup {
+                                if let Some(pos) = dup_pos {
+                                    // 已存在：移到最前面，更新时间
+                                    let mut item = history.remove(pos);
+                                    item.time = chrono::Local::now().to_rfc3339();
+                                    history.insert(0, item);
+
+                                    let now = std::time::Instant::now();
+                                    if now.duration_since(last_save) > Duration::from_millis(800) {
+                                        save_history(&history);
+                                        last_save = now;
+                                    }
+                                    drop(history);
+
+                                    if let Some(window) = app.get_webview_window("main") {
+                                        let _ = window.emit("history-updated", ());
+                                    }
+                                } else {
+                                    // 新条目
                                     let item = ClipItem {
                                         id: *next_id,
                                         content: ClipContent::Text { content: text },
@@ -815,7 +832,7 @@ fn start_clipboard_watcher(app: AppHandle) {
                 let hash = compute_image_hash(&png_data);
                 if hash != last_image_hash {
                     log_msg(&format!("剪贴板图片变化 ({}x{}, {}字节)", img_w, img_h, png_data.len()));
-                    last_image_hash = hash;
+                    last_image_hash = hash.clone();
                     if !text_processed {
                         last_text.clear();
                     }
@@ -871,6 +888,44 @@ fn start_clipboard_watcher(app: AppHandle) {
                                     if let Some(window) = app.get_webview_window("main") {
                                         let _ = window.emit("history-updated", ());
                                     }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // 图片 hash 与上次相同（重复复制同一张图），将历史中的已有项移到最前面
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Ok(mut history) = state.history.lock() {
+                            // 找到 hash 匹配的图片项：通过重新计算已有图片的 hash 来匹配
+                            let mut found_pos = None;
+                            for (i, item) in history.iter().enumerate() {
+                                if let ClipContent::Image { path, .. } = &item.content {
+                                    // 读取图片文件计算 hash
+                                    let local_path = path.trim_start_matches("file:///");
+                                    let local_path = local_path.replace('/', "\\");
+                                    if let Ok(data) = std::fs::read(&local_path) {
+                                        let item_hash = compute_image_hash(&data);
+                                        if item_hash == hash {
+                                            found_pos = Some(i);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(pos) = found_pos {
+                                let mut item = history.remove(pos);
+                                item.time = chrono::Local::now().to_rfc3339();
+                                history.insert(0, item);
+
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last_save) > Duration::from_millis(800) {
+                                    save_history(&history);
+                                    last_save = now;
+                                }
+                                drop(history);
+
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.emit("history-updated", ());
                                 }
                             }
                         }
