@@ -98,6 +98,16 @@ async function init() {
     render();
   });
 
+  listen('settings-updated', async () => {
+    const s = await invoke('get_settings');
+    if (s) {
+      settings = s;
+      appVersion = s.version || appVersion;
+      document.documentElement.setAttribute('data-theme', settings.theme);
+      render();
+    }
+  });
+
   listen('update-check-result', (e) => {
     updateInfo = e.payload;
     checkingUpdate = false;

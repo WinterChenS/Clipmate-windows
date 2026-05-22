@@ -125,6 +125,25 @@ pub fn save_settings_cmd(new_settings: AppSettings, app: AppHandle, state: State
         }
     }
 
+    // 更新 autolaunch 状态 + 托盘菜单文字
+    {
+        let label = if new_settings.auto_start { "开机启动 ✓" } else { "开机启动" };
+        // 更新 AppState 中的菜单文字
+        if let Ok(mut text) = state.autostart_menu_text.lock() {
+            *text = label.to_string();
+        }
+        // 更新 autolaunch
+        {
+            use tauri_plugin_autostart::ManagerExt;
+            let manager = app.autolaunch();
+            if new_settings.auto_start {
+                let _ = manager.enable();
+            } else {
+                let _ = manager.disable();
+            }
+        }
+    }
+
     Ok(())
 }
 

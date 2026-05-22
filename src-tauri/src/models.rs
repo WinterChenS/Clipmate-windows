@@ -64,6 +64,7 @@ pub struct AppState {
     pub visible: Mutex<bool>,
     pub next_id: Mutex<i64>,
     pub last_shown: Mutex<std::time::Instant>,
+    pub autostart_menu_text: Mutex<String>, // 托盘"开机启动"菜单文字（跨模块共享）
 }
 
 // ─── 数据目录 ──────────────────────────────────────────────────

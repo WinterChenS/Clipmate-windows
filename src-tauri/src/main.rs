@@ -81,6 +81,7 @@ fn main() {
         visible: Mutex::new(false),
         next_id: Mutex::new(next_id),
         last_shown: Mutex::new(std::time::Instant::now() - Duration::from_secs(10)),
+        autostart_menu_text: Mutex::new(auto_start_label.to_string()),
     };
 
     log_msg("构建 Tauri 应用...");
@@ -147,10 +148,13 @@ fn main() {
 
             log_msg("托盘菜单创建成功");
 
+            // 提前 clone autostart_item 供后续 settings-updated 监听使用
+            let autostart_item_for_listener = autostart_item.clone();
+
             // 托盘图标：安全加载，失败则跳过托盘
             let icon_result = app.default_window_icon().cloned();
             if let Some(icon) = icon_result {
-                match TrayIconBuilder::new()
+                match TrayIconBuilder::with_id("main")
                     .icon(icon)
                     .menu(&menu)
                     .tooltip(&format!("ClipMate v{}", env!("CARGO_PKG_VERSION")))
@@ -178,6 +182,9 @@ fn main() {
                                         // 更新托盘菜单文字
                                         let label = if enable { "开机启动 ✓" } else { "开机启动" };
                                         let _ = autostart_item.set_text(label);
+                                        if let Ok(mut text) = state.autostart_menu_text.lock() {
+                                            *text = label.to_string();
+                                        }
                                         {
                                             use tauri_plugin_autostart::ManagerExt;
                                             let manager = app.autolaunch();
@@ -195,6 +202,8 @@ fn main() {
                                         }
                                     }
                                 }
+                                // 通知前端设置已变更
+                                let _ = app.emit("settings-updated", ());
                             }
                             "quit" => {
                                 app.exit(0);
@@ -325,6 +334,16 @@ fn main() {
                         let _ = window.emit("update-check-result", &result);
                     }
                 }
+            });
+
+            // 监听 settings-updated 事件，同步托盘菜单文字
+            use tauri::Listener;
+            let app_h_listen = app_handle.clone();
+            app.listen("settings-updated", move |_| {
+                let state = app_h_listen.state::<AppState>();
+                if let Ok(label) = state.autostart_menu_text.lock() {
+                    let _ = autostart_item_for_listener.set_text(label.as_str());
+                };
             });
 
             log_msg("setup 完成");
