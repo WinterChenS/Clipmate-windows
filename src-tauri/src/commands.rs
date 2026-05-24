@@ -400,12 +400,25 @@ pub fn set_autostart(enable: bool, app: AppHandle, state: State<'_, AppState>) -
     let manager = app.autolaunch();
     if enable {
         manager.enable().map_err(|e| e.to_string())?;
+        log_msg("开机自启动已启用（设置面板）");
     } else {
         manager.disable().map_err(|e| e.to_string())?;
+        log_msg("开机自启动已关闭（设置面板）");
     }
-    let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
-    settings.auto_start = enable;
-    save_settings(&settings);
+    {
+        let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
+        settings.auto_start = enable;
+        save_settings(&settings);
+    }
+    // 同步更新托盘菜单文字
+    {
+        let label = if enable { "开机启动 ✓" } else { "开机启动" };
+        if let Ok(mut text) = state.autostart_menu_text.lock() {
+            *text = label.to_string();
+        }
+    }
+    // 通知前端和托盘菜单监听器刷新
+    let _ = app.emit("settings-updated", ());
     Ok(enable)
 }
 

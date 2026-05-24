@@ -24,15 +24,23 @@ pub struct ClipItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub layout: String,            // "bottom" | "right"
+    #[serde(alias = "max_items")]
     pub max_items: usize,          // 200
+    #[serde(alias = "show_status_bar")]
     pub show_status_bar: bool,
     pub theme: String,             // "dark" | "light"
+    #[serde(alias = "auto_start")]
     pub auto_start: bool,
+    #[serde(alias = "toggle_shortcut")]
     pub toggle_shortcut: String,   // "Ctrl+Shift+V"
+    #[serde(alias = "settings_shortcut")]
     pub settings_shortcut: String, // "Ctrl+Shift+S"
+    #[serde(alias = "skip_update_version")]
     pub skip_update_version: Option<String>,
+    #[serde(alias = "max_storage_mb")]
     pub max_storage_mb: u64,       // 最大存储容量 (MB)
     #[serde(default)]
     pub version: Option<String>,   // 记录版本号
